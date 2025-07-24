@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8" />
+  <title>RS256 JWT Generátor – Dátumokkal</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 30px auto; }
+    label { font-weight: bold; margin-top: 14px; display: block; }
+    input, textarea, button {
+      width: 100%; padding: 8px; margin-top: 6px; box-sizing: border-box;
+    }
+    button { background: #1976d2; color: white; font-weight: bold; border: none; cursor: pointer; }
+    #preview { max-width: 200px; margin-top: 10px; border: 1px solid #ccc; display: block; }
+    #status { margin-top: 14px; font-style: italic; white-space: pre-line; }
+  </style>
+</head>
+<body>
+  <h2>RS256 JWT Generátor – Érvényességi Időkkel</h2>
+
+  <label>Privát kulcs (.pem):</label>
+  <input type="file" id="loadKey" accept=".pem,.key" />
+
+  <label>Fénykép:</label>
+  <input type="file" id="photo" accept="image/*" />
+  <img id="preview" alt="Előnézet" />
+
+  <label>Név:</label>
+  <input type="text" id="name" placeholder="Pl. Nagy Gábor" />
+
+  <label>Azonosító:</label>
+  <input type="text" id="id" placeholder="Pl. XYZ789" />
+
+  <label>Érvényesség kezdete (YYYY-MM-DD HH:MM:SS):</label>
+  <input type="text" id="nbf" placeholder="Pl. 2025-07-18 08:00:00" />
+
+  <label>Lejárat ideje (YYYY-MM-DD HH:MM:SS):</label>
+  <input type="text" id="exp" placeholder="Pl. 2025-07-18 20:00:00" />
+
+  <button id="generate">JWT létrehozása</button>
+  <button id="download" disabled>JWT letöltése</button>
+
+  <textarea id="out" rows="5" placeholder="JWT token jelenik itt meg…"></textarea>
+  <div id="status"></div>
+
+  <script type="module">
+    import { SignJWT, importPKCS8 } from "https://cdn.jsdelivr.net/npm/jose@4.14.4/+esm";
+
+    let privateKey = null;
+    let jwtToken = null;
+    let photoDataURI = null;
+
+    // Privát kulcs betöltése
+    document.getElementById("loadKey").addEventListener("change", async e => {
+      const keyText = await e.target.files[0].text();
+      privateKey = await importPKCS8(keyText, "RS256");
+      alert("Privát kulcs importálva!");
+    });
+
+    // Kép betöltése
+    document.getElementById("photo").addEventListener("change", e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        photoDataURI = reader.result;
+        document.getElementById("preview").src = photoDataURI;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // JWT generálás
+ document.getElementById("generate").addEventListener("click", async () => {
+  const name = document.getElementById("name").value.trim();
+  const id = document.getElementById("id").value.trim();
+  const nbfStr = document.getElementById("nbf").value.trim();
+  const expStr = document.getElementById("exp").value.trim();
+
+  if (!privateKey) return alert("Hiányzik a privát kulcs!");
+  if (!photoDataURI) return alert("Hiányzik a fénykép!");
+  if (!name || !id || !expStr) return alert("Név, azonosító és lejárat kötelező!");
+
+  const parseTime = str => {
+    const [datePart, timePart] = str.split(" ");
+    const [y, m, d] = datePart.split("-").map(Number);
+    const [h, min, s] = timePart.split(":").map(Number);
+    return Math.floor(new Date(y, m - 1, d, h, min, s).getTime() / 1000);
+  };
+
+  const iat = Math.floor(Date.now() / 1000);
+  const nbf = nbfStr ? parseTime(nbfStr) : iat;
+  const exp = parseTime(expStr);
+
+  if (nbf >= exp) return alert("A lejárat nem lehet korábban vagy azonos az érvényesség kezdetével!");
+
+  const payload = { name, id, iat, nbf, exp, photo: photoDataURI };
+
+  jwtToken = await new SignJWT(payload)
+    .setProtectedHeader({ alg: "RS256", typ: "JWT" })
+    .sign(privateKey);
+
+  document.getElementById("out").value = jwtToken;
+  document.getElementById("download").disabled = false;
+  updateStatus(iat, nbf, exp);
+});
+
+    // Letöltés
+    document.getElementById("download").addEventListener("click", () => {
+      const blob = new Blob([jwtToken], { type: "text/plain" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+    //   a.download = "token.jwt";
+      const name = document.getElementById("name").value.trim().replace(/\s+/g, "_") || "token";
+      a.download = `${name}.jwt`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    // Állapot kiírása
+    function updateStatus(iat, nbf, exp) {
+      const fmt = ts => new Date(ts * 1000).toLocaleString("hu-HU");
+      const now = Math.floor(Date.now() / 1000);
+      let msg = "";
+      if (now < nbf) msg = "Még nem érvényes";
+      else if (now > exp) msg = "❌ Lejárt";
+      else msg = "✅ Érvényes";
+
+      document.getElementById("status").textContent =
+        `${msg}\n\nKiadás: ${fmt(iat)}\nÉrvényes ettől: ${fmt(nbf)}\nLejárat: ${fmt(exp)}`;
+    }
+  </script>
+</body>
+</html>

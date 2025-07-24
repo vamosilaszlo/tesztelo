@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8" />
+  <title>RS256 JWT Ellenőrző</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 30px auto; padding: 10px; }
+    label { display: block; margin-top: 16px; font-weight: bold; }
+    textarea, button {
+      width: 100%; padding: 8px; margin-top: 6px; box-sizing: border-box;
+    }
+    button { background-color: #1976d2; color: white; font-weight: bold; border: none; cursor: pointer; }
+    #info {
+      margin-top: 20px;
+      padding: 12px;
+      border-width: 2px;
+      border-style: solid;
+      background: #f9f9f9;
+      white-space: pre-line;
+      font-family: monospace;
+    }
+    #photo {
+      margin-top: 10px; max-width: 200px; display: none;
+      border: 1px solid #ccc;
+    }
+    .status-valid   { border-color: green; color: darkgreen; }
+    .status-expired { border-color: orange; color: darkorange; }
+    .status-broken  { border-color: red; color: darkred; }
+    .status-notyet  { border-color: purple; color: purple; }
+  </style>
+</head>
+<body>
+  <h2>RS256 JWT Ellenőrző (webes)</h2>
+
+  <label>JWT token (.jwt vagy .txt):</label>
+  <textarea id="tokenText" rows="4" placeholder="JWT token…"></textarea>
+
+  <button id="verifyBtn">Ellenőrzés</button>
+
+  <div id="info"></div>
+  <img id="photo" alt="Fénykép" />
+
+  <script type="module">
+    import { importSPKI, jwtVerify, decodeJwt } from "https://cdn.jsdelivr.net/npm/jose@4.14.4/+esm";
+
+    const tokenText = document.getElementById("tokenText");
+    const info = document.getElementById("info");
+    const photo = document.getElementById("photo");
+
+    // 🔐 Fixen beégetett publikus kulcs (cseréld le a sajátodra)
+    const pem = `
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAhUGNmaBR0wlyzR+jDYT3
+G/zmjuCfJyEwmbWfc/MtbnDKgeWgWX8Bumwff8R+nNFbV5bgT+lH/v/ZProRp+D8
+WqWiNAku0SkxaHJGxRmGNXwLlPdk7ua5LiP1jIKr0bDPkbi0yVXCNxDoVuqUOghA
+wIF/KIrgIZLfi4y//XkKlWUHdJd8iRlJxo04mC7atBZuHKwUvN+y/6UHgiI6wSI9
+vTJzAu6XJFG2j8AtIHbIcZQm7ReMUUpUBDnIYLtBRjyhAQlspl+g9f1YV6Cte8S/
+gEJPHDGQW5S5a0gJpavHbdJ46vJ99Cl40I9Mm1FoFnwHdD5VkTXeDhNwBWmts/r5
+jQIDAQAB
+-----END PUBLIC KEY-----
+
+`.trim(); // ⬅️ Itt cseréld le a saját kulcsodra!
+
+    document.getElementById("verifyBtn").addEventListener("click", async () => {
+      info.className = ""; info.textContent = ""; photo.style.display = "none";
+
+      const token = tokenText.value.trim();
+      if (!token) return info.textContent = "Hiányzó JWT token!";
+
+      let payload = null;
+      let status = "";
+      let cssClass = "status-broken";
+
+      try {
+        const key = await importSPKI(pem, "RS256");
+        try {
+          const { payload: vp } = await jwtVerify(token, key);
+          payload = vp;
+        } catch (sigErr) {
+          try {
+            payload = decodeJwt(token);
+          } catch {
+            payload = null;
+          }
+        }
+      } catch {
+        info.className = "status-broken";
+        return info.textContent = "Érvénytelen publikus kulcs!";
+      }
+
+      if (!payload) {
+        info.className = "status-broken";
+        return info.textContent = "Nem dekódolható a token.";
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      const iat = payload.iat || 0;
+      const nbf = payload.nbf || iat;
+      const exp = payload.exp || Infinity;
+
+      if (now < nbf) {
+        status = "Még nem érvényes";
+        cssClass = "status-notyet";
+      } else if (now > exp) {
+        status = "Lejárt";
+        cssClass = "status-expired";
+      } else {
+        try {
+          const key = await importSPKI(pem, "RS256");
+          await jwtVerify(token, key);
+          status = "Érvényes";
+          cssClass = "status-valid";
+        } catch {
+          status = "Hamis vagy sérült";
+          cssClass = "status-broken";
+        }
+      }
+
+      info.className = cssClass;
+
+      const format = ts => new Date(ts * 1000).toLocaleString("hu-HU");
+      const issued = iat ? format(iat) : "–";
+      const notBefore = payload.nbf ? format(nbf) : null;
+      const expires = (payload.exp && payload.exp !== Infinity) ? format(exp) : "–";
+      const name = payload.name || "–";
+      const id = payload.id || "–";
+
+      info.textContent =
+        `${status}\n\n` +
+        `Név: ${name}\n` +
+        `Azonosító: ${id}\n` +
+        `Kiadva: ${issued}\n` +
+        (notBefore ? `Érvényes ettől: ${notBefore}\n` : "") +
+        `Lejár: ${expires}`;
+
+      if (payload.photo?.startsWith("data:image/")) {
+        photo.src = payload.photo;
+        photo.style.display = "block";
+      }
+    });
+  </script>
+</body>
+</html>
